@@ -268,18 +268,19 @@ void response(void *fun_params){
     strcpy(path, fparams.resource);
     strcpy(&path[strlen(fparams.resource)],reqline[1]);
     printf("file: %s\n", path);
-    if (strncmp(reqline[1], "/\0", 2)==0 ){\
+    if (strncmp(reqline[1], "/\0", 2)==0 ){
                 //send(sock, "HTTP/1.0 200 OK\n\n", 17, 0);
         write (fparams.sock, "Bienvenido a BADSA server ud se encuentra en la carpeta principal\n", 66);
         printf("todo bien aqui\n");
     }
-    if ( (fd=open(path, O_RDONLY))!=-1 )    //FILE FOUND
-    {
+    if ( (fd=open(path, O_RDONLY))!=-1 ){   //FILE FOUND
         send(fparams.sock, "HTTP/1.0 200 OK\n\n", 17, 0);
+
         while ( (bytes_read=read(fd, data_to_send, BYTES))>0 )
             write (fparams.sock, data_to_send, bytes_read);
-    }
-    else    write(fparams.sock, "HTTP/1.0 404 Not Found\n", 23);
+
+    }else
+        write(fparams.sock, "HTTP/1.0 404 Not Found\n", 23);
     shutdown(fparams.sock, SHUT_RDWR);
     close(fparams.sock);
     //waitFor(5);
