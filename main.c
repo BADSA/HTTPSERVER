@@ -4,15 +4,15 @@
  * not  from our authority, the way  to solve this  problem
  * is usually the same, so probably the majority of examples
  * looks similar.
- * 
+ *
  * The port number, source folder and mode is passed as an argument
- * 
+ *
  * Instituto Tecnologico de Costa Rica
  * Melvin Elizondo Perez
  * Daniel Solis Mendez
  * II Semester 2015
- * 
- * 
+ *
+ *
  * Web Server 5 modes usage.
 */
 
@@ -28,7 +28,7 @@
 #include <signal.h>
 
 #define BYTES 1024
-
+#define MAXSOCK 64
 /*
  * Function definitions.
  */
@@ -41,10 +41,11 @@ void pre_forked(void*);
 void pre_threaded(void*);
 void *stop_server(void*);
 void error(char *msg);
+void *handle_req(void * args);
 
 /*
  * Struct definition
- * 
+ *
  * This is needed because the threads only receive void* parameter
  * This struct is parsed as void and parsed back into struck in the
  * different functions to get the values.
@@ -61,6 +62,13 @@ typedef struct s_response_params {
     char resource[100];
 } rparams;
 
+// Global var for mutex.
+int socks[MAXSOCK], attendClient, newClient;
+pthread_mutex_t	cliMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cliCond = PTHREAD_COND_INITIALIZER;
+
+char resource[100];
+
 /*
  * Main function, it handles all the socket info,
  * Also determine which mode the server is going
@@ -74,7 +82,7 @@ int main(int argc, char *argv[]) {
     //Variable declaration
     int sockfd, portno,modenum,k;
     struct sockaddr_in serv_addr, cli_addr;
-    char mode[15],port[10],resource[100],k_process[5];
+    char mode[15],port[10],k_process[5];
     params fun_params;
 
     //Just to print which mode was selected
@@ -98,7 +106,7 @@ int main(int argc, char *argv[]) {
     bzero((char *) &serv_addr, sizeof(serv_addr));
     portno = atoi(argv[1]);
     strcpy(port,argv[1]);
-    strcpy(resource,argv[2]);
+    strcpy(resource, argv[2]);
     modenum = atoi(argv[3]);
     strcpy(mode,MODE[modenum-1]);
 
@@ -152,12 +160,13 @@ int main(int argc, char *argv[]) {
             break;
         case 4:
             if (argc < 5)
-                error("Value of k not provided");
+                error("Value of k not provided\n");
             pre_forked(&fun_params);
             break;
         case 5:
             if (argc < 5)
-                error("Value of k not provided");
+                error("Value of k not provided\n");
+            pre_threaded(&fun_params);
             break;
         default:
             break;
@@ -260,7 +269,6 @@ void pre_forked(void *fun_params){
     for(i=0; i<fparams.k; i++){
         pid = fork();
         if (pid == 0) {
-            printf("%d\n",pid);
             while(1){
 
                 newsockfd = accept(fparams.sockfd,
@@ -289,19 +297,66 @@ void pre_forked(void *fun_params){
 
 void pre_threaded(void *fun_params){
 
+    params fparams = *((params*)(fun_params));
+    pthread_t *tid = calloc(fparams.k, sizeof(pthread_t));
+    int sock, i;
+
+	for (i = 0; i < fparams.k; i++){
+		if (pthread_create(&tid[i], NULL, &handle_req, i))
+			error("ERROR: pthread_create");
+    }
+
+
+	attendClient = newClient = 0;
+	while(1){
+		sock = accept(fparams.sockfd, NULL,NULL);
+		if(sock==-1)
+			error("ERROR: could not accept new connection on socket");
+		pthread_mutex_lock(&cliMutex);
+		socks[newClient] = sock;
+		if (++newClient == MAXSOCK) newClient = 0;
+		if (newClient == attendClient) error("ERROR: newClient = attendClient");
+		pthread_cond_signal(&cliCond);
+		pthread_mutex_unlock(&cliMutex);
+	}
+}
+
+void *handle_req(void * args){
+	int sock;
+    int tn = ((int*)(args));
+
+	pthread_detach(pthread_self());
+	printf("Thread #%d created and waiting for clients\n", ++tn);
+
+	while(1){
+    	pthread_mutex_lock(&cliMutex);
+		while (attendClient == newClient)
+			pthread_cond_wait(&cliCond, &cliMutex);
+		sock = socks[attendClient];
+		if (++attendClient == MAXSOCK) attendClient = 0;
+		pthread_mutex_unlock(&cliMutex);
+
+        rparams fparams;
+        fparams.sock = sock;
+        printf("sock es %d\n",sock);
+		response(&fparams);
+	}
+	return 0;
 }
 
 void response(void *fun_params){
     rparams fparams = *((rparams*)(fun_params));
     char mesg[99999], *reqline[3] ,data_to_send[BYTES], path[99999];
     int fd,bytes_read;
+    printf("sock2 es %d\n",fparams.sock);
     recv(fparams.sock, mesg, 99999, 0);
-    //printf("MESSAGE\n %s\n",mesg);
+
     reqline[0] = strtok (mesg, " \t\n");
     reqline[1] = strtok(NULL, " \t");
-    strcpy(path, fparams.resource);
+
+    strcpy(path, resource);
     printf("recurso: %s\n",reqline[1]);
-    strcpy(&path[strlen(fparams.resource)], reqline[1] == NULL ? "/\0" : reqline[1]);
+    strcpy(&path[strlen(resource)], reqline[1] == NULL ? "/\0" : reqline[1]);
     printf("file: %s\n", path);
     if (reqline[1]!=NULL)
     if (strncmp(reqline[1], "/\0", 2)==0 ){
@@ -315,7 +370,7 @@ void response(void *fun_params){
             write (fparams.sock, data_to_send, bytes_read);
 
     }else{
-        printf("NO SE ENCUENTRA");
+        printf("Not found\n");
         send(fparams.sock, "HTTP/1.0 404 Not Found\n", 23, 0);
         write(fparams.sock, "HTTP/1.0 404 Not Found\n", 23);
     }
@@ -333,10 +388,10 @@ void response(void *fun_params){
 
 void* stop_server(void* args) {
     char end[4];
-    printf("\nWrite \"fin\" if you want to shut the server off: ");
+    printf("\nWrite \"fin\" if you want to shut the server off: \n");
     scanf("%s", &end);
     while ( strcmp(end, "fin") != 0  ){
-        printf("\nWrite \"fin\" if you want to shut the server off: ");
+        printf("\nWrite \"fin\" if you want to shut the server off: \n");
         scanf("%s", &end);
     }
     printf("Server was shutted down\n");
