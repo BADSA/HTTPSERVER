@@ -25,6 +25,8 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
+
 #define BYTES 1024
 
 /*
@@ -35,6 +37,8 @@ void response(void*);
 void fifo(void*);
 void forked(void*);
 void threaded(void*);
+void pre_forked(void*);
+void pre_threaded(void*);
 void *stop_server(void*);
 void error(char *msg);
 
@@ -47,8 +51,7 @@ void error(char *msg);
  */
 
 typedef struct s_params{
-    int sockfd;
-    int clilen;
+    int k,sockfd,clilen;
     char resource[100];
     struct sockaddr_in cli_addr;
 } params;
@@ -72,6 +75,7 @@ int main(int argc, char *argv[]) {
     int sockfd, portno,modenum,k;
     struct sockaddr_in serv_addr, cli_addr;
     char mode[15],port[10],resource[100],k_process[5];
+    params fun_params;
 
     //Just to print which mode was selected
     const char *MODE[5] = {"FIFO","Forked",
@@ -129,14 +133,12 @@ int main(int argc, char *argv[]) {
     listen(sockfd,5);
 
     //Filling params to the functions
-    params fun_params;
+    fun_params.k = k;
     fun_params.cli_addr = cli_addr;
     fun_params.clilen = sizeof(cli_addr);
     fun_params.sockfd = sockfd;
     memcpy(fun_params.resource, resource, strlen(resource)+1);
 
-
-    pthread_t threads[k];
     int t = 0;
     switch(modenum){
         case 1:
@@ -146,18 +148,16 @@ int main(int argc, char *argv[]) {
             forked(&fun_params);
             break;
         case 3:;
-            printf("todo bien aqui");
-            pthread_t thread;
-            pthread_create(&thread, NULL, &fifo , &fun_params);
-            pthread_join(thread,status);
+            threaded(&fun_params);
             break;
         case 4:
-            for (t = 0; t<k; t++)
-                pthread_create(&threads[t], NULL, &forked, &fun_params);
+            if (argc < 5)
+                error("Value of k not provided");
+            pre_forked(&fun_params);
             break;
         case 5:
-            for (t = 0; t<k; t++)
-                pthread_create(&threads[t], NULL, &fifo, &fun_params);
+            if (argc < 5)
+                error("Value of k not provided");
             break;
         default:
             break;
@@ -177,8 +177,8 @@ int main(int argc, char *argv[]) {
 
 void fifo(void* fun_params) {
     params fparams = *((params*)(fun_params));
-
     int sock;
+
     while (1) {
         sock = accept(fparams.sockfd,
                       (struct sockaddr *) &fparams.cli_addr, &fparams.clilen);
@@ -229,8 +229,9 @@ void forked(void* fun_params) {
 void threaded(void* fun_params){
     params fparams = *((params*)(fun_params));
     int newsockfd;
-    int pid;
+    int loops =0;
     while (1) {
+        printf("loops %d\n",loops++);
         newsockfd = accept(fparams.sockfd,
                            (struct sockaddr *) &fparams.cli_addr,
                            &fparams.clilen);
@@ -238,52 +239,90 @@ void threaded(void* fun_params){
         if (newsockfd < 0)
             error("ERROR on accept");
 
-        pid = fork();
+        rparams response_params;
+        response_params.sock = newsockfd;
+        memcpy(response_params.resource,fparams.resource,strlen(fparams.resource)+1);
 
-        if (pid < 0)
-            error("ERROR on fork");
+        pthread_t thread;
 
-        if (pid == 0){
-            close(fparams.sockfd);
-            rparams response_params;
-            response_params.sock;
-            memcpy(response_params.resource,fparams.resource,strlen(fparams.resource)+1);
-            response(&response_params);
-            exit(0);
-        }else
+        if (pthread_create(&thread,NULL,&response,&response_params) < 0){
             close(newsockfd);
+            error("Error creating thread");
+        }
     }
 }
 
+void pre_forked(void *fun_params){
+    params fparams = *((params*)(fun_params));
+    int newsockfd;
+    int i;
+    pid_t pid;
+    for(i=0; i<fparams.k; i++){
+        pid = fork();
+        printf("%d\n",pid);
+        if (pid == 0) {
+            printf("%d\n",pid);
+            while(1){
+                newsockfd = accept(fparams.sockfd,
+                                   (struct sockaddr *) &fparams.cli_addr,
+                                   &fparams.clilen);
 
+                if(newsockfd>=0) {
+                    close(fparams.sockfd);
+                    rparams response_params;
+                    response_params.sock = newsockfd;
+                    memcpy(response_params.resource, fparams.resource, strlen(fparams.resource) + 1);
+                    response(&response_params);
+                    close(newsockfd);
+                    //exit(0);
+                }
+            }
+        } else if(pid<0){
+            close(fparams.sockfd);
+            error("Error on fork");
+        }
+        for (;;)
+            pause();
+    }
+}
+
+void pre_threaded(void *fun_params){
+
+}
 
 void response(void *fun_params){
     rparams fparams = *((rparams*)(fun_params));
     char mesg[99999], *reqline[3] ,data_to_send[BYTES], path[99999];
     int fd,bytes_read;
-
     recv(fparams.sock, mesg, 99999, 0);
+    //printf("MESSAGE\n %s\n",mesg);
     reqline[0] = strtok (mesg, " \t\n");
     reqline[1] = strtok(NULL, " \t");
     strcpy(path, fparams.resource);
-    strcpy(&path[strlen(fparams.resource)],reqline[1]);
+    printf("recurso: %s\n",reqline[1]);
+    strcpy(&path[strlen(fparams.resource)], reqline[1] == NULL ? "/\0" : reqline[1]);
     printf("file: %s\n", path);
+    if (reqline[1]!=NULL)
     if (strncmp(reqline[1], "/\0", 2)==0 ){
-                //send(sock, "HTTP/1.0 200 OK\n\n", 17, 0);
-        write (fparams.sock, "Bienvenido a BADSA server ud se encuentra en la carpeta principal\n", 66);
-        printf("todo bien aqui\n");
-    }
-    if ( (fd=open(path, O_RDONLY))!=-1 ){   //FILE FOUND
         send(fparams.sock, "HTTP/1.0 200 OK\n\n", 17, 0);
+        char msg[] = {"<h1>Bienvenido a BADSA SERVER</h1></br>Se encuentra en la carpeta principal"};
+        write (fparams.sock, msg, strlen(msg));
+    }else if ( (fd=open(path, O_RDONLY)) != -1 ){   //FILE FOUND
+        send(fparams.sock, "HTTP/1.0 200 OK!\n\n", 18, 0);
 
-        while ( (bytes_read=read(fd, data_to_send, BYTES))>0 )
+        while ((bytes_read=read(fd, data_to_send, BYTES))>0)
             write (fparams.sock, data_to_send, bytes_read);
 
-    }else
+    }else{
+        printf("NO SE ENCUENTRA");
+        send(fparams.sock, "HTTP/1.0 404 Not Found\n", 23, 0);
         write(fparams.sock, "HTTP/1.0 404 Not Found\n", 23);
+    }
+
+
     shutdown(fparams.sock, SHUT_RDWR);
     close(fparams.sock);
-    //waitFor(5);
+
 }
 
 /*
@@ -299,7 +338,7 @@ void* stop_server(void* args) {
         printf("\nWrite \"fin\" if you want to shut the server off: ");
         scanf("%s", &end);
     }
-    printf("Server was shutted down");
+    printf("Server was shutted down\n");
     exit(0);
 }
 
