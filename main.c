@@ -259,31 +259,32 @@ void pre_forked(void *fun_params){
     pid_t pid;
     for(i=0; i<fparams.k; i++){
         pid = fork();
-        printf("%d\n",pid);
         if (pid == 0) {
             printf("%d\n",pid);
             while(1){
+
                 newsockfd = accept(fparams.sockfd,
                                    (struct sockaddr *) &fparams.cli_addr,
                                    &fparams.clilen);
+                printf("Nueva Solicitud");
 
                 if(newsockfd>=0) {
-                    close(fparams.sockfd);
                     rparams response_params;
                     response_params.sock = newsockfd;
                     memcpy(response_params.resource, fparams.resource, strlen(fparams.resource) + 1);
                     response(&response_params);
                     close(newsockfd);
-                    //exit(0);
                 }
             }
         } else if(pid<0){
             close(fparams.sockfd);
             error("Error on fork");
         }
-        for (;;)
-            pause();
+
     }
+    close(fparams.sockfd);
+    for (;;)
+        pause();
 }
 
 void pre_threaded(void *fun_params){
